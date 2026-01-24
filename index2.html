@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>10通道監控系統 - 背景優化版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <style>
+        :root { --alert-red: #ff4d4d; --bg-gray: #f0f2f5; --primary: #3498db; --dark: #2c3e50; }
+        body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg-gray); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        .top-bar { background: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 100; }
+        .status-info { display: flex; align-items: center; gap: 8px; font-weight: bold; }
+        .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ccc; transition: 0.3s; }
+
+        .dashboard { flex: 1; display: grid; padding: 15px; gap: 15px; overflow-y: auto; grid-template-columns: repeat(1, 1fr); align-content: start; }
+        @media (min-width: 600px) { .dashboard { grid-template-columns: repeat(2, 1fr); } }
+        @media (min-width: 1024px) { .dashboard { grid-template-columns: repeat(5, 1fr); } }
+
+        .sensor-card { background: white; border-radius: 12px; padding: 15px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 2px solid transparent; }
+        .sensor-card.alert { border-color: var(--alert-red); background-color: #fff1f1; animation: pulse 1s infinite alternate; }
+        @keyframes pulse { from { box-shadow: 0 0 5px var(--alert-red); } to { box-shadow: 0 0 15px var(--alert-red); } }
+        
+        .ch-label { font-size: 0.7rem; background: #eee; padding: 2px 6px; border-radius: 4px; color: #666; float: left; }
+        .alias-input { display: block; width: 100%; border: none; border-bottom: 1px dashed #ccc; font-size: 1.1rem; font-weight: bold; margin-top: 5px; outline: none; background: transparent; text-align: center; color: var(--dark); }
+        .sensor-value { font-size: 3rem; font-weight: bold; margin: 10px 0; color: var(--dark); min-height: 3.5rem; }
+        .threshold-box { font-size: 0.85rem; color: #888; border-top: 1px solid #f5f5f5; padding-top: 10px; }
+        .threshold-box input { width: 55px; padding: 4px; text-align: center; border: 1px solid #ddd; border-radius: 4px; }
+        .threshold-box select { width: 55px; padding: 4px; text-align: center; border: 1px solid #ddd; border-radius: 4px; background: white; }
+
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-settings { background: #666; color: white; }
+        .btn-conn { background: var(--primary); color: white; }
+        .btn-conn.connected { background: #e74c3c; }
+
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal { background: white; width: 90%; max-width: 400px; border-radius: 12px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .setting-row { margin-bottom: 15px; }
+        .setting-row label { display: block; font-size: 0.85rem; font-weight: bold; color: var(--primary); margin-bottom: 5px; }
+        .input-group { display: flex; gap: 5px; margin-bottom: 5px; }
+        input[type="text"], input[type="number"], select { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+
+        #log-console { background: #1a1a1a; color: #0f0; font-family: monospace; font-size: 11px; height: 100px; overflow-y: auto; padding: 8px; border-radius: 5px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <div class="status-info">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-text">未連線</span>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button id="notify-btn" class="btn" style="background:#fff3cd; color:#856404" onclick="requestNotification()">🔔 開啟通知</button>
+            <button id="conn-btn" class="btn btn-conn" onclick="handleConnect()">🚀 連線</button>
+            <button id="audio-btn" class="btn" style="background:#eee" onclick="toggleAudio()">🔊 音效：關閉</button>
+            <button class="btn btn-settings" onclick="toggleModal(true)">⚙️ 設定</button>
+        </div>
+    </div>
+
+    <div class="dashboard" id="sensor-grid"></div>
+
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal">
+            <h3 style="margin-top:0">系統參數設定</h3>
+            <div class="setting-row">
+                <label>MQTT Broker 網址</label>
+                <div class="input-group">
+                    <select id="broker-select" onchange="document.getElementById('broker-input').value=this.value"></select>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="broker-input" placeholder="wss://broker.emqx.io:8084/mqtt">
+                </div>
+            </div>
+            <div class="setting-row">
+                <label>主題前綴 (Topic Prefix)</label>
+                <input type="text" id="prefix-input" value="sensor/" onchange="localStorage.setItem('mqtt_prefix', this.value); updateHints();">
+            </div>
+            <div id="log-console">>> 系統準備就緒...</div>
+            <button class="btn" style="width:100%; margin-top:10px; background:#ddd;" onclick="toggleModal(false)">關閉視窗</button>
+        </div>
+    </div>
+
+    <audio id="alert-sound" preload="auto">
+        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+    </audio>
+
+    <script>
+        var mqttClient = null;
+        var isAudioOn = localStorage.getItem('audio_on') === '1';
+        var alertSound = document.getElementById('alert-sound');
+        var alarmTimer = null;
+        var activeAlerts = new Set(); // 記錄目前哪些通道在警報中，避免重複通知
+
+        // --- 1. 通知功能 ---
+        function requestNotification() {
+            if (!("Notification" in window)) {
+                alert("此瀏覽器不支援桌面通知");
+                return;
+            }
+            Notification.requestPermission().then(function(permission) {
+                if (permission === "granted") {
+                    document.getElementById('notify-btn').style.display = 'none';
+                    addLog("✅ 桌面通知已開啟");
+                }
+            });
+        }
+
+        function triggerDesktopNotification(id, value, alias) {
+            if (Notification.permission === "granted" && !activeAlerts.has(id)) {
+                new Notification("🚨 警報通知", {
+                    body: "設備 [" + alias + "] 數值異常: " + value,
+                    icon: "https://cdn-icons-png.flaticon.com/512/179/179386.png"
+                });
+            }
+        }
+
+        // --- 2. 音效邏輯 ---
+        function syncAudioButton() {
+            var btn = document.getElementById('audio-btn');
+            if (!btn) return;
+            btn.innerText = isAudioOn ? "✅ 音效：開啟" : "🔊 音效：關閉";
+            btn.style.background = isAudioOn ? "#dff7e6" : "#eee";
+        }
+
+        function updateAlarmLoop() {
+            var hasAlert = document.querySelector('.sensor-card.alert');
+            if (isAudioOn && hasAlert) {
+                if (!alarmTimer) {
+                    alertSound.loop = true;
+                    alertSound.play().catch(function(e){ console.log("播放失敗", e)});
+                    alarmTimer = true;
+                }
+            } else {
+                alertSound.pause();
+                alarmTimer = null;
+            }
+        }
+
+        // --- 3. 介面生成 ---
+        function renderCards() {
+            var container = document.getElementById('sensor-grid');
+            var html = "";
+            for (var i = 1; i <= 10; i++) {
+                var alias = localStorage.getItem('alias-' + i) || ('設備 ' + i);
+                var limit = localStorage.getItem('limit-' + i) || 30;
+                var op = localStorage.getItem('op-' + i) || 'lt';
+                html += '<div class="sensor-card" id="card-' + i + '">' +
+                        '<span class="ch-label">CH ' + i + '</span>' +
+                        '<input type="text" class="alias-input" value="' + alias + '" onchange="localStorage.setItem(\'alias-' + i + '\', this.value)">' +
+                        '<div class="sensor-value" id="val-' + i + '">--</div>' +
+                        '<div class="threshold-box">' +
+                        '警報 <select id="op-' + i + '" onchange="localStorage.setItem(\'op-' + i + '\', this.value)">' +
+                        '<option value="lt"' + (op === 'lt' ? ' selected' : '') + '>&lt;</option>' +
+                        '<option value="eq"' + (op === 'eq' ? ' selected' : '') + '>=</option>' +
+                        '<option value="gt"' + (op === 'gt' ? ' selected' : '') + '>&gt;</option>' +
+                        '</select> <input type="number" id="limit-' + i + '" value="' + limit + '" onchange="localStorage.setItem(\'limit-' + i + '\', this.value)">' +
+                        '</div>' +
+                        '<div id="hint-' + i + '" style="font-size:0.6rem; color:#ccc; margin-top:5px;"></div>' +
+                        '</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        // --- 4. 連線邏輯 ---
+        function handleConnect() {
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.end();
+                return;
+            }
+            var url = document.getElementById('broker-input').value.trim();
+            if (!url) { toggleModal(true); return; }
+
+            addLog("嘗試連線: " + url);
+            mqttClient = mqtt.connect(url, { connectTimeout: 5000, keepalive: 60 });
+
+            mqttClient.on('connect', function() {
+                addLog("✅ 連線成功", "#00ff00");
+                setUI(true);
+                var pre = document.getElementById('prefix-input').value;
+                for (var i = 1; i <= 10; i++) mqttClient.subscribe(pre + i);
+            });
+
+            mqttClient.on('message', function(topic, msg) {
+                var pre = document.getElementById('prefix-input').value;
+                var id = parseInt(topic.replace(pre, ''));
+                if (id >= 1 && id <= 10) {
+                    var val = parseFloat(msg.toString());
+                    var limit = parseFloat(document.getElementById('limit-' + id).value);
+                    var op = document.getElementById('op-' + id).value;
+                    var alias = document.querySelector('#card-' + id + ' .alias-input').value;
+                    
+                    var valEl = document.getElementById('val-' + id);
+                    var cardEl = document.getElementById('card-' + id);
+                    
+                    valEl.innerText = isNaN(val) ? msg.toString() : val;
+                    
+                    var isAlert = false;
+                    if (!isNaN(val) && !isNaN(limit)) {
+                        if (op === 'lt') isAlert = val < limit;
+                        else if (op === 'eq') isAlert = val === limit;
+                        else if (op === 'gt') isAlert = val > limit;
+                    }
+
+                    if (isAlert) {
+                        // 觸發桌面通知 (如果之前不是警報狀態)
+                        if (!activeAlerts.has(id)) {
+                            triggerDesktopNotification(id, val, alias);
+                            activeAlerts.add(id);
+                        }
+                        valEl.style.color = "red";
+                        cardEl.classList.add('alert');
+                    } else {
+                        activeAlerts.delete(id);
+                        valEl.style.color = "var(--dark)";
+                        cardEl.classList.remove('alert');
+                    }
+                    updateAlarmLoop();
+                }
+            });
+
+            mqttClient.on('close', function() { setUI(false); addLog("連線已斷開"); });
+        }
+
+        // --- 工具函數 ---
+        function toggleModal(s) { document.getElementById('modal-overlay').style.display = s ? 'flex' : 'none'; }
+        function setUI(c) {
+            document.getElementById('conn-btn').innerText = c ? "🛑 斷開" : "🚀 連線";
+            document.getElementById('status-dot').style.background = c ? "#2ecc71" : "#ccc";
+            document.getElementById('status-text').innerText = c ? "已連線" : "未連線";
+        }
+        function toggleAudio() {
+            isAudioOn = !isAudioOn;
+            localStorage.setItem('audio_on', isAudioOn ? '1' : '0');
+            syncAudioButton();
+            updateAlarmLoop();
+        }
+        function addLog(m, c) {
+            var l = document.getElementById('log-console');
+            l.innerHTML = '<div style="color:'+(c||'#0f0')+'">['+new Date().toLocaleTimeString()+'] '+m+'</div>' + l.innerHTML;
+        }
+        function initSettings() {
+            var last = localStorage.getItem('mqtt_last') || 'wss://broker.emqx.io:8084/mqtt';
+            document.getElementById('broker-input').value = last;
+            if (Notification.permission === "granted") document.getElementById('notify-btn').style.display = 'none';
+        }
+
+        renderCards();
+        initSettings();
+        syncAudioButton();
+    </script>
+</body>
+</html>
