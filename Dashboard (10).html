@@ -1,0 +1,156 @@
+
+        <!DOCTYPE html><html><head><meta charset='utf-8'><meta http-equiv='Access-Control-Allow-Origin' content='*'>
+        <meta http-equiv='Access-Control-Allow-Credentials' content='true'>
+        <script src='https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js'></script>
+        <script src='https://riddleling.github.io/SpBlocklyJS/gameelements.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/MQTT_20220324/mqtt.min.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/Chart.min.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/pretty-doughtnut.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.tempgauge.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simplegauge.js'></script>
+        <script src='https://riddleling.github.io/SpBlocklyJS/waterbubble.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/linechart.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/barchart.js'></script>
+        <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simpleswitch.js'></script>
+        <link href='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simplegauge.css' type='text/css' rel='stylesheet'>
+        <link href='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/simpleswitch.css' type='text/css' rel='stylesheet'>
+        </head><body style="margin:0; min-height:510px; position:relative; background:#ffffff;"><script>const delay=(seconds)=>{return new Promise((resolve)=>{setTimeout(resolve,seconds*1000);});};const main=async()=>{
+
+        var newdate;
+        const clientId = "mqtt_" + Math.random().toString(16).substr(2, 8);
+        const options = {
+            keepalive: 60,
+            clientId: clientId,
+            protocolId: "MQTT",
+            protocolVersion: 4,
+            clean: true,
+            reconnectPeriod: 1000,
+            connectTimeout: 30 * 1000
+        }
+
+        
+        ;(function() {
+            document.body.style.position = 'relative';
+            document.body.style.minHeight = '510px';
+            document.body.style.margin = '0';
+            document.body.style.background = '#ffffff';
+
+            const widget = document.createElement('div');
+            widget.id = 'text_box_水位';
+            widget.style.position = 'absolute';
+            widget.style.left = '0px';
+            widget.style.top = '0px';
+            widget.style.width = '200px';
+            widget.style.height = '120px';
+            widget.style.boxSizing = 'border-box';
+            widget.style.border = '2px solid #e993f3';
+            widget.style.borderRadius = '12px';
+            widget.style.background = '#ffffff';
+            widget.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.08)';
+            widget.style.padding = '12px';
+            widget.style.display = 'flex';
+            widget.style.flexDirection = 'column';
+            widget.style.justifyContent = 'space-between';
+            widget.style.overflow = 'hidden';
+            widget.style.zIndex = '10';
+
+            const title = document.createElement('div');
+            title.textContent = '水位';
+            title.style.fontSize = '14px';
+            title.style.fontWeight = '700';
+            title.style.color = '#333333';
+            title.style.marginBottom = '8px';
+
+            const value = document.createElement('div');
+            value.id = 'text_box_value_水位';
+            value.textContent = '--';
+            value.dataset.unit = 'cm';
+            value.style.flex = '1';
+            value.style.display = 'flex';
+            value.style.alignItems = 'center';
+            value.style.justifyContent = 'center';
+            value.style.textAlign = 'center';
+            value.style.fontSize = '30px';
+            value.style.fontWeight = '700';
+            value.style.color = '#111111';
+            value.style.wordBreak = 'break-word';
+
+            widget.appendChild(title);
+            widget.appendChild(value);
+            document.body.appendChild(widget);
+        })();
+        
+        temperatureGauge({
+            id: "tmp",
+            name: "溫度 入",
+            width: 100,
+            left: 275,
+            top: 0,
+            val: 0,
+            min: 0,
+            max: 100,
+            fillColor: "#"+"acd8e1",
+            borderWidth: 4,
+            unit: " "+"度",
+            decimal: 0,
+            showLabel: true,
+            labelSize: 14,
+        });
+        
+        temperatureGauge({
+            id: "tmp2",
+            name: "溫度 出",
+            width: 100,
+            left: 505,
+            top: 0,
+            val: 0,
+            min: 0,
+            max: 100,
+            fillColor: "#"+"b0acfc",
+            borderWidth: 4,
+            unit: " "+"度",
+            decimal: 0,
+            showLabel: true,
+            labelSize: 14,
+        });
+        
+
+        if (typeof mqtt === "undefined") {
+            console.error("mqtt library not loaded");
+            return;
+        }
+
+        var mqtt_client = mqtt.connect("ws://iot.coreflux.cloud:5000/mqtt", options);
+        mqtt_client.on("connect", ()=>{
+            console.log("connected");
+            mqtt_client.subscribe("623/rr/3");
+mqtt_client.subscribe("623/rr/1");
+mqtt_client.subscribe("623/rr/2");
+
+            mqtt_client.on("message", async function (topic, payload) {
+                
+                if (topic == "623/rr/3") {
+                    
+            (function() {
+                const elem = document.getElementById('text_box_value_水位');
+                if (!elem) return;
+                const value = new TextDecoder().decode(payload);
+                const unit = elem.dataset.unit || '';
+                elem.textContent = value.length ? (unit.length ? (value + ' ' + unit) : value) : '--';
+            })();
+            
+                }
+            
+                if (topic == "623/rr/1") {
+                    temperatureGauge({id: "tmp", val: (new TextDecoder().decode(payload))});
+                }
+            
+                if (topic == "623/rr/2") {
+                    temperatureGauge({id: "tmp2", val: (new TextDecoder().decode(payload))});
+                }
+            
+            })
+        })
+
+        };main();</script></body></html>
+        
