@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv='Access-Control-Allow-Origin' content='*'>
+    <meta http-equiv='Access-Control-Allow-Credentials' content='true'>
+    <title>MQTT 監控面板</title>
+    <script src='https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js'></script>
+    <script src='https://riddleling.github.io/SpBlocklyJS/gameelements.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/MQTT_20220324/mqtt.min.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/Chart.min.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/pretty-doughtnut.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.tempgauge.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simplegauge.js'></script>
+    <script src='https://riddleling.github.io/SpBlocklyJS/waterbubble.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/linechart.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/barchart.js'></script>
+    <script src='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simpleswitch.js'></script>
+    <link href='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/jquery.simplegauge.css' type='text/css' rel='stylesheet'>
+    <link href='https://fustyles.github.io/webduino/SpBlocklyJS/chart_20220723/simpleswitch.css' type='text/css' rel='stylesheet'>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #f4f7f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        /* 主容器：負責自動排列 */
+        .dashboard-container {
+            display: flex;
+            flex-wrap: wrap; /* 自動換行 */
+            gap: 20px; /* 元件間距 */
+            justify-content: center; /* 居中對齊 */
+            align-items: flex-start;
+        }
+        /* 元件的外框限制 */
+        .widget-wrapper {
+            position: relative;
+            min-width: 200px;
+            display: flex;
+            justify-content: center;
+        }
+        /* 針對溫度計的特殊調整 */
+        .gauge-wrapper {
+            width: 120px;
+            height: 320px; /* 預留溫度計高度 */
+        }
+    </style>
+</head>
+<body>
+
+<div class="dashboard-container" id="main-dashboard">
+    <div id="water-slot" class="widget-wrapper"></div>
+    <div id="tmp-slot" class="widget-wrapper gauge-wrapper"></div>
+    <div id="tmp2-slot" class="widget-wrapper gauge-wrapper"></div>
+</div>
+
+<script>
+const delay = (seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+
+const main = async () => {
+    const clientId = "mqtt_" + Math.random().toString(16).substr(2, 8);
+    const options = {
+        keepalive: 60,
+        clientId: clientId,
+        protocolId: "MQTT",
+        protocolVersion: 4,
+        clean: true,
+        reconnectPeriod: 1000,
+        connectTimeout: 30 * 1000
+    };
+
+    // 1. 初始化 水位 Widget
+    (function() {
+        const slot = document.getElementById('water-slot');
+        const widget = document.createElement('div');
+        widget.id = 'text_box_水位';
+        widget.style.width = '200px';
+        widget.style.height = '120px';
+        widget.style.boxSizing = 'border-box';
+        widget.style.border = '2px solid #e993f3';
+        widget.style.borderRadius = '12px';
+        widget.style.background = '#ffffff';
+        widget.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.08)';
+        widget.style.padding = '12px';
+        widget.style.display = 'flex';
+        widget.style.flexDirection = 'column';
+        widget.style.justifyContent = 'space-between';
+
+        const title = document.createElement('div');
+        title.textContent = '水位';
+        title.style.fontSize = '14px';
+        title.style.fontWeight = '700';
+        title.style.color = '#333333';
+
+        const value = document.createElement('div');
+        value.id = 'text_box_value_水位';
+        value.textContent = '--';
+        value.dataset.unit = 'cm';
+        value.style.flex = '1';
+        value.style.display = 'flex';
+        value.style.alignItems = 'center';
+        value.style.justifyContent = 'center';
+        value.style.fontSize = '30px';
+        value.style.fontWeight = '700';
+        value.style.color = '#111111';
+
+        widget.appendChild(title);
+        widget.appendChild(value);
+        slot.appendChild(widget);
+    })();
+
+    // 2. 初始化 溫度計 (移除 fixed left/top)
+    // 注意：因 temperatureGauge 內部邏輯會產生絕對定位元件，我們將其附加到對應的 slot 中
+    temperatureGauge({
+        id: "tmp",
+        name: "溫度 入",
+        width: 100,
+        left: 10, // 在 Slot 內部的相對位置
+        top: 0,
+        val: 0,
+        min: 0,
+        max: 100,
+        fillColor: "#acd8e1",
+        borderWidth: 4,
+        unit: " 度",
+        decimal: 0,
+        showLabel: true,
+        labelSize: 14,
+    });
+    // 將產生的 canvas 移動到對應 slot
+    document.getElementById('tmp-slot').appendChild(document.getElementById('tmp_canvas') || document.getElementById('tmp'));
+
+    temperatureGauge({
+        id: "tmp2",
+        name: "溫度 出",
+        width: 100,
+        left: 10,
+        top: 0,
+        val: 0,
+        min: 0,
+        max: 100,
+        fillColor: "#b0acfc",
+        borderWidth: 4,
+        unit: " 度",
+        decimal: 0,
+        showLabel: true,
+        labelSize: 14,
+    });
+    document.getElementById('tmp2-slot').appendChild(document.getElementById('tmp2_canvas') || document.getElementById('tmp2'));
+
+    // 3. MQTT 連線邏輯
+    if (typeof mqtt === "undefined") {
+        console.error("mqtt library not loaded");
+        return;
+    }
+
+    var mqtt_client = mqtt.connect("ws://iot.coreflux.cloud:5000/mqtt", options);
+    
+    mqtt_client.on("connect", () => {
+        console.log("MQTT connected");
+        mqtt_client.subscribe("623/rr/3");
+        mqtt_client.subscribe("623/rr/1");
+        mqtt_client.subscribe("623/rr/2");
+
+        mqtt_client.on("message", async function (topic, payload) {
+            const data = new TextDecoder().decode(payload);
+            
+            if (topic == "623/rr/3") {
+                const elem = document.getElementById('text_box_value_水位');
+                if (elem) {
+                    const unit = elem.dataset.unit || '';
+                    elem.textContent = data.length ? (data + ' ' + unit) : '--';
+                }
+            }
+            if (topic == "623/rr/1") {
+                temperatureGauge({id: "tmp", val: data});
+            }
+            if (topic == "623/rr/2") {
+                temperatureGauge({id: "tmp2", val: data});
+            }
+        });
+    });
+};
+
+main();
+</script>
+</body>
+</html>
