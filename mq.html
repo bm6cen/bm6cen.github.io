@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#3498db">
+    <title>10通道監控系統 - 最終修復版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <style>
+        :root {
+            --alert-red: #ff4d4d;
+            --bg-gray: #f0f2f5;
+            --primary: #3498db;
+            --dark: #2c3e50;
+            --success: #2ecc71;
+            --warning: #f39c12;
+        }
+        , ::before, *::after { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-gray);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        / 頂部導航 /
+        .top-bar {
+            background: white;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            z-index: 100;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .status-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .status-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ccc;
+            transition: background 0.3s ease;
+        }
+        / 卡片區域 /
+        .dashboard {
+            flex: 1 1 auto;
+            display: grid;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            grid-template-columns: repeat(1, 1fr);
+            align-content: start;
+            scrollbar-width: thin;
+            scrollbar-color: #ccc transparent;
+        }
+        .dashboard::-webkit-scrollbar { width: 6px; }
+        .dashboard::-webkit-scrollbar-track { background: transparent; }
+        .dashboard::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 3px; }
+        @media (min-width: 500px) { .dashboard { grid-template-columns: repeat(2, 1fr); } }
+        @media (min-width: 800px) { .dashboard { grid-template-columns: repeat(3, 1fr); } }
+        @media (min-width: 1100px) { .dashboard { grid-template-columns: repeat(5, 1fr); } }
+        .sensor-card {
+            background: white;
+            border-radius: 14px;
+            padding: 16px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.07);
+            border: 2px solid transparent;
+            transition: transform 0.1s ease, box-shadow 0.2s ease;
+        }
+        .sensor-card:active { transform: scale(0.98); }
+        .sensor-card.alert {
+            border-color: var(--alert-red);
+            background-color: #fff1f1;
+            animation: pulse 1.5s infinite alternate;
+        }
+        @keyframes pulse {
+            from { box-shadow: 0 0 6px var(--alert-red); }
+            to { box-shadow: 0 0 18px var(--alert-red); }
+        }
+        .ch-label {
+            font-size: 0.75rem;
+            background: #eee;
+            color: #666;
+            padding: 3px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 6px;
+        }
+        .alias-input {
+            display: block;
+            width: 100%;
+            max-width: 200px;
+            margin: 0 auto 8px auto;
+            border: none;
+            border-bottom: 2px dashed #ccc;
+            font-size: 1.2rem;
+            font-weight: 600;
+outline: none;
+            background: transparent;
+            text-align: center;
+            color: var(--dark);
+            padding: 4px 0;
+            transition: border-color 0.2s;
+        }
+        .alias-input:focus { border-bottom-color: var(--primary); }
+        .sensor-value {
+            font-size: clamp(2.2rem, 8vw, 3.5rem);
+            font-weight: 700;
+            margin: 10px 0;
+            color: var(--dark);
+            min-height: 2.8rem;
+            word-break: break-word;
+        }
+        .threshold-box {
+            font-size: 0.88rem;
+            color: #777;
+            border-top: 1px solid #eee;
+            padding-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            align-items: center;
+        }
+        .threshold-box label {
+            margin: 0;
+            font-size: 0.85rem;
+        }
+        .threshold-box input,
+        .threshold-box select {
+            width: 56px;
+            padding: 8px;
+            text-align: center;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+        .threshold-box select { background: white; }
+        / 按鈕與彈窗 /
+        .btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+            touch-action: manipulation;
+            white-space: nowrap;
+        }
+        .btn:hover { transform: translateY(-2px); }
+        .btn:active { transform: translateY(0); }
+        .btn-settings {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-conn {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-conn.connected {
+            background: #e74c3c;
+        }
+        .btn-audio {
+            background: #e9ecef;
+            color: #495057;
+        }
+        .btn-audio.on { background: #d4edda; color: #155724; }
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+        .modal {
+            background: white;
+            width: 92%;
+            max-width: 420px;
+            margin: 12px;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+            animation: modalFadeIn 0.25s ease-out;
+        }
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .modal h3 {
+            margin: 0 0 20px 0;
+            color: var(--primary);
+            font-size: 1.4rem;
+            text-align: center;
+        }
+        .setting-row {
+            margin-bottom: 20px;
+        }
+        .setting-row label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+        .input-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        input[type="text"],
+        input[type="number"],
+        select {
+            flex: 1 1 120px;
+            min-width: 80px;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+box-shadow: 0 0 0 3px rgba(52,152,219,0.2);
+        }
+        #log-console {
+            background: #1a1a1a;
+            color: #0f0;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 11px;
+            height: 90px;
+            overflow-y: auto;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 14px;
+            border-top: 1px solid #333;
+        }
+        / 小畫面調整 /
+        @media (max-width: 480px) {
+            .top-bar { flex-direction: column; align-items: stretch; }
+            .top-bar > * { width: 100%; }
+            .top-bar .status-info { justify-content: center; }
+            .top-bar .btn-group { width: 100%; display: flex; gap: 8px; }
+            .top-bar .btn-group .btn { flex: 1; }
+            .sensor-card { padding: 12px; }
+            .alias-input { font-size: 1.1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="status-info">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-text">未連線</span>
+        </div>
+        <div class="btn-group" style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="conn-btn" class="btn btn-conn" onclick="handleConnect()">🚀 連線</button>
+            <button id="audio-btn" class="btn btn-audio" onclick="toggleAudio()">🔊 音效：關閉</button>
+            <button class="btn btn-settings" onclick="toggleModal(true)">⚙️ 設定</button>
+        </div>
+    </div>
+
+    <div class="dashboard" id="sensor-grid"></div>
+
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal">
+            <h3>系統參數設定</h3>
+            <div class="setting-row">
+                <label>MQTT Broker 網址</label>
+                <div class="input-group">
+                    <select id="broker-select" onchange="document.getElementById('broker-input').value=this.value"></select>
+                    <button class="btn" style="background:#fee; color:red; padding:8px 12px;" onclick="deleteBroker()">🗑️</button>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="broker-input" placeholder="wss://broker.emqx.io:8084/mqtt">
+                    <button class="btn" style="background:#27ae60; color:white; padding:8px 12px;" onclick="saveBroker()">💾 儲存</button>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label>主題前綴 (Topic Prefix)</label>
+                <input type="text" id="prefix-input" value="sensor/" onchange="localStorage.setItem('mqtt_prefix', this.value); updateHints();">
+            </div>
+            <div id="log-console">>> 系統準備就緒...</div>
+            <button class="btn" style="width:100%; margin-top:14px; background:#ddd; color:#333;" onclick="toggleModal(false)">關閉視窗</button>
+        </div>
+    </div>
+
+    <audio id="alert-sound" preload="auto">
+        <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+    </audio>
+
+    <script>
+        // --- 核心邏輯 ---
+        var mqttClient = null;
+        var isAudioOn = localStorage.getItem('audio_on') === '1';
+        var alertSound = document.getElementById('alert-sound');
+        var alarmTimer = null;
+        var alarmPhase = 'off';
+
+        function syncAudioButton() {
+            var btn = document.getElementById('audio-btn');
+            if (!btn) return;
+            btn.innerText = isAudioOn ? "✅ 音效：開啟" : "🔊 音效：關閉";
+            btn.className = "btn btn-audio " + (isAudioOn ? "on" : "");
+        }
+
+        function hasAnyAlert() {
+            return !!document.querySelector('.sensor-card.alert');
+        }
+
+        function stopAlarmLoop() {
+            if (alarmTimer) {
+                clearTimeout(alarmTimer);
+
+alarmTimer = null;
+            }
+            alarmPhase = 'off';
+            if (alertSound) {
+                alertSound.pause();
+                alertSound.loop = false;
+            }
+        }
+
+        function startAlarmOnPhase() {
+            if (!isAudioOn || !hasAnyAlert()) {
+                stopAlarmLoop();
+                return;
+            }
+            if (alarmTimer) {
+                clearTimeout(alarmTimer);
+                alarmTimer = null;
+            }
+            alarmPhase = 'on';
+            if (alertSound) {
+                alertSound.currentTime = 0;
+                alertSound.loop = true;
+                alertSound.play().catch(function(){});
+            }
+            alarmTimer = setTimeout(function() {
+                startAlarmOffPhase();
+            }, 5000);
+        }
+
+        function startAlarmOffPhase() {
+            if (!isAudioOn || !hasAnyAlert()) {
+                stopAlarmLoop();
+                return;
+            }
+            if (alarmTimer) {
+                clearTimeout(alarmTimer);
+                alarmTimer = null;
+            }
+            if (alertSound) {
+                alertSound.pause();
+                alertSound.loop = false;
+            }
+            alarmPhase = 'off';
+            alarmTimer = setTimeout(function() {
+                startAlarmOnPhase();
+            }, 10000);
+        }
+
+        function updateAlarmLoop() {
+            if (isAudioOn && hasAnyAlert()) {
+                if (!alarmTimer) startAlarmOnPhase();
+                return;
+            }
+            stopAlarmLoop();
+        }
+
+        // 1. 生成卡片 (立即執行)
+        function renderCards() {
+            var container = document.getElementById('sensor-grid');
+            if (!container) return;
+            var html = "";
+            for (var i = 1; i <= 10; i++) {
+                var alias = localStorage.getItem('alias-' + i) || ('設備 ' + i);
+                var limit = localStorage.getItem('limit-' + i) || 30;
+                var op = localStorage.getItem('op-' + i) || 'lt';
+                html += '<div class="sensor-card" id="card-' + i + '">' +
+                        '<span class="ch-label">CH ' + i + '</span>' +
+                        '<input type="text" class="alias-input" value="' + alias + '" onchange="localStorage.setItem(\'alias-' + i + '\', this.value)">' +
+                        '<div class="sensor-value" id="val-' + i + '">--</div>' +
+                        '<div class="threshold-box">' +
+                        '警報 <select id="op-' + i + '" onchange="localStorage.setItem(\'op-' + i + '\', this.value)">' +
+                        '<option value="lt"' + (op === 'lt' ? ' selected' : '') + '>&lt;</option>' +
+                        '<option value="eq"' + (op === 'eq' ? ' selected' : '') + '>=</option>' +
+                        '<option value="gt"' + (op === 'gt' ? ' selected' : '') + '>&gt;</option>' +
+                        '</select> <input type="number" id="limit-' + i + '" value="' + limit + '" onchange="localStorage.setItem(\'limit-' + i + '\', this.value)">' +
+                        '</div>' +
+                        '<div id="hint-' + i + '" style="font-size:0.65rem; color:#ccc; margin-top:6px;"></div>' +
+                        '</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        // 2. 初始載入設定
+        function initSettings() {
+            var list = JSON.parse(localStorage.getItem('mqtt_list') || '[]');
+            var sel = document.getElementById('broker-select');
+            sel.innerHTML = '<option value="">-- 歷史記錄 --</option>';
+            list.forEach(function(url) {
+                var opt = document.createElement('option');
+                opt.value = url; 
+
+opt.textContent = url;
+                sel.appendChild(opt);
+            });
+            var last = localStorage.getItem('mqtt_last');
+            if (last) document.getElementById('broker-input').value = last;
+            var pre = localStorage.getItem('mqtt_prefix') || 'sensor/';
+            document.getElementById('prefix-input').value = pre;
+            updateHints();
+        }
+
+        function updateHints() {
+            var pre = document.getElementById('prefix-input').value;
+            for (var i = 1; i <= 10; i++) {
+                var h = document.getElementById('hint-' + i);
+                if (h) h.innerText = pre + i;
+            }
+        }
+
+        // 3. 連線功能
+        function handleConnect() {
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.end();
+                return;
+            }
+            var url = document.getElementById('broker-input').value.trim();
+            if (!url) {
+                toggleModal(true);
+                return;
+            }
+            addLog("嘗試連線: " + url);
+            mqttClient = mqtt.connect(url, { connectTimeout: 5000 });
+
+            mqttClient.on('connect', function() {
+                addLog("✅ 連線成功", "#00ff00");
+                setUI(true);
+                var pre = document.getElementById('prefix-input').value;
+                for (var i = 1; i <= 10; i++) mqttClient.subscribe(pre + i);
+            });
+
+            mqttClient.on('message', function(topic, msg) {
+                var pre = document.getElementById('prefix-input').value;
+                var id = parseInt(topic.replace(pre, ''));
+                if (id >= 1 && id <= 10) {
+                    var val = parseFloat(msg.toString());
+                    var limit = parseFloat(document.getElementById('limit-' + id).value);
+                    var opEl = document.getElementById('op-' + id);
+                    var op = opEl ? opEl.value : 'lt';
+                    var valEl = document.getElementById('val-' + id);
+                    var cardEl = document.getElementById('card-' + id);
+
+                    if (valEl) {
+                        valEl.innerText = isNaN(val) ? msg.toString() : val;
+                        var isAlert = false;
+                        if (!isNaN(val) && !isNaN(limit)) {
+                            if (op === 'lt') isAlert = val < limit;
+                            else if (op === 'eq') isAlert = val === limit;
+                            else if (op === 'gt') isAlert = val > limit;
+                        }
+                        if (isAlert) {
+                            valEl.style.color = "var(--alert-red)";
+                            cardEl.classList.add('alert');
+                        } else {
+                            valEl.style.color = "var(--dark)";
+                            cardEl.classList.remove('alert');
+                        }
+                        updateAlarmLoop();
+                    }
+                }
+            });
+
+            mqttClient.on('close', function() {
+                setUI(false);
+                addLog("連線已斷開");
+            });
+            mqttClient.on('error', function(e) {
+                addLog("❌ 錯誤: " + e.message, "red");
+            });
+        }
+
+        // 4. 小功能函數
+        function toggleModal(s) {
+            document.getElementById('modal-overlay').style.display = s ? 'flex' : 'none';
+        }
+
+        function saveBroker() {
+            var url = document.getElementById('broker-input').value.trim();
+            if (!url) return;
+            var list = JSON.parse(localStorage.getItem('mqtt_list') || '[]');
+            if (list.indexOf(url) === -1) list.push(url);
+            localStorage.setItem('mqtt_list', JSON.stringify(list));
+
+localStorage.setItem('mqtt_last', url);
+            initSettings();
+            addLog("Broker 已儲存");
+        }
+
+        function deleteBroker() {
+            var url = document.getElementById('broker-select').value;
+            if (!url) return;
+            var list = JSON.parse(localStorage.getItem('mqtt_list') || '[]');
+            list = list.filter(function(i) { return i !== url; });
+            localStorage.setItem('mqtt_list', JSON.stringify(list));
+            initSettings();
+            document.getElementById('broker-input').value = "";
+        }
+
+        function setUI(connected) {
+            var connBtn = document.getElementById('conn-btn');
+            connBtn.innerText = connected ? "🛑 斷開" : "🚀 連線";
+            connBtn.className = connected ? "btn btn-conn connected" : "btn btn-conn";
+            document.getElementById('status-dot').style.background = connected ? "var(--success)" : "#ccc";
+            document.getElementById('status-text').innerText = connected ? "已連線" : "未連線";
+        }
+
+        function toggleAudio() {
+            isAudioOn = !isAudioOn;
+            localStorage.setItem('audio_on', isAudioOn ? '1' : '0');
+            syncAudioButton();
+            updateAlarmLoop();
+        }
+
+        function addLog(message, color) {
+            var logConsole = document.getElementById('log-console');
+            if (logConsole) {
+                var timestamp = new Date().toLocaleTimeString();
+                var line = '<div style="color:' + (color || '#0f0') + ';">[' + timestamp + '] ' + message + '</div>';
+                logConsole.innerHTML = line + logConsole.innerHTML;
+                // 限制日誌行數
+                var lines = logConsole.getElementsByTagName('div');
+                if (lines.length > 50) {
+                    logConsole.removeChild(lines[lines.length - 1]);
+                }
+            }
+        }
+
+        // --- 啟動 ---
+        renderCards();
+        initSettings();
+        syncAudioButton();
+        updateAlarmLoop();
+    </script>
+</body>
+</html>
